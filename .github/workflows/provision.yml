@@ -1,0 +1,74 @@
+name: Terraform Infra
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Get Secrets (Bitwarden)
+      uses: bitwarden/sm-action@v2
+      with:
+        access_token: ${{ secrets.BW_ACCESS_TOKEN }}
+        base_url: https://vault.bitwarden.com
+        secrets: |
+          9aae3c8c-e6ad-498b-81f4-b350016b6af6 > DO_TOKEN
+          8ba24b65-ef89-458f-bb78-b350016a8bf0 > DO_SSH_KEY_FINGERPRINT
+
+    - name: Export secrets to job env
+      run: |
+        echo "DO_TOKEN=${DO_TOKEN}" >> $GITHUB_ENV
+        echo "DO_SSH_KEY_FINGERPRINT=${DO_SSH_KEY_FINGERPRINT}" >> $GITHUB_ENV
+
+    - name: Generate ephemeral SSH keypair (runner-only)
+      run: |
+        mkdir -p ~/.ssh
+        ssh-keygen -t ed25519 -f ~/.ssh/gha -N "" -C "gha-$(date +%s)"
+        chmod 600 ~/.ssh/gha
+        echo "Ephemeral public key:"
+        cat ~/.ssh/gha.pub
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Terraform Init
+      working-directory: infra
+      run: terraform init -upgrade
+
+    - name: Terraform Apply (creates DO ssh key + droplet)
+      working-directory: infra
+      env:
+        TF_VAR_do_token: ${{ env.DO_TOKEN }}
+        TF_VAR_personal_ssh_key_name: ${{ env.DO_PERSONAL_KEY_NAME }}
+      run: |
+        export TF_VAR_ssh_public_key="$(cat ~/.ssh/gha.pub)"
+        terraform apply -auto-approve
+
+    - name: Get Droplet IP
+      id: tfout
+      working-directory: infra
+      run: |
+        ip=$(terraform output -raw droplet_ip)
+        echo "droplet_ip=$ip" >> "$GITHUB_OUTPUT"
+        echo "Droplet IP: $ip"
+
+    - name: Install Ansible
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ansible
+
+    - name: Run Ansible playbook (inline inventory)
+      env:
+        DOKPLOY_HOST: ${{ steps.tfout.outputs.droplet_ip }}
+      run: |
+        printf "Host *\n  StrictHostKeyChecking no\n" > ~/.ssh/config
+        # Optional: Pass your public key string via secret if you don't want Terraform to inject it
+        # echo "PERSONAL_PUBKEY=${{ secrets.PERSONAL_SSH_PUBLIC_KEY }}" >> $GITHUB_ENV
+        ansible-playbook \
+          -i "${DOKPLOY_HOST}," \
+          -e ansible_user=root \
+          -e ansible_ssh_private_key_file=~/.ssh/gha \
+          playbooks/dokploy.yml
