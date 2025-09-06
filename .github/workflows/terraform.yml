@@ -2,19 +2,14 @@ name: Terraform Infra
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   terraform:
-    name: Apply Infra with Terraform
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./infra
 
     steps:
-    - name: Get Secrets
+    - name: Get Secrets (Bitwarden)
       uses: bitwarden/sm-action@v2
       with:
         access_token: ${{ secrets.BW_ACCESS_TOKEN }}
@@ -28,18 +23,25 @@ jobs:
         echo "DO_TOKEN=${DO_TOKEN}" >> $GITHUB_ENV
         echo "DO_SSH_KEY_FINGERPRINT=${DO_SSH_KEY_FINGERPRINT}" >> $GITHUB_ENV
 
-    - name: Checkout Repo
+    - name: Checkout
       uses: actions/checkout@v3
+
+    - name: Verify structure
+      run: |
+        pwd
+        ls -la
+        ls -la infra
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
 
     - name: Terraform Init
-      run: terraform init
+      working-directory: infra
+      run: terraform init -upgrade
 
     - name: Terraform Apply
-      run: terraform apply -auto-approve
+      working-directory: infra
       env:
         TF_VAR_do_token: ${{ env.DO_TOKEN }}
         TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
-
+      run: terraform apply -auto-approve
