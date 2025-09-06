@@ -23,6 +23,11 @@ jobs:
           9aae3c8c-e6ad-498b-81f4-b350016b6af6 > DO_TOKEN
           8ba24b65-ef89-458f-bb78-b350016a8bf0 > DO_SSH_KEY_FINGERPRINT
 
+    - name: Export secrets to job env
+      run: |
+        echo "DO_TOKEN=${DO_TOKEN}" >> $GITHUB_ENV
+        echo "DO_SSH_KEY_FINGERPRINT=${DO_SSH_KEY_FINGERPRINT}" >> $GITHUB_ENV
+
     - name: Checkout Repo
       uses: actions/checkout@v3
 
@@ -35,6 +40,6 @@ jobs:
     - name: Terraform Apply
       run: terraform apply -auto-approve
       env:
-        TF_VAR_do_token: ${{ secrets.DO_TOKEN }}
-        TF_VAR_ssh_key_fingerprint: ${{ secrets.DO_SSH_KEY_FINGERPRINT }}
+        TF_VAR_do_token: ${{ env.DO_TOKEN }}
+        TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
 
