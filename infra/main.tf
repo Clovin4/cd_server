@@ -11,7 +11,7 @@ resource "digitalocean_droplet" "vps" {
   monitoring         = true
   backups            = false
   ipv6               = false
-  tags               = ["dokploy", "infra"]
+  tags               = ["cd", "infra"]
 }
 
 output "ip_address" {

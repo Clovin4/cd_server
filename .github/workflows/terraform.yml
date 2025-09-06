@@ -14,6 +14,15 @@ jobs:
         working-directory: ./infra
 
     steps:
+    - name: Get Secrets
+      uses: bitwarden/sm-action@v2
+      with:
+        access_token: ${{ secrets.BW_ACCESS_TOKEN }}
+        base_url: https://vault.bitwarden.com
+        secrets: |
+          9aae3c8c-e6ad-498b-81f4-b350016b6af6 > DO_TOKEN
+          8ba24b65-ef89-458f-bb78-b350016a8bf0 > DO_SSH_KEY_FINGERPRINT
+
     - name: Checkout Repo
       uses: actions/checkout@v3
 
