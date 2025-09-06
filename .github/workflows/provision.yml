@@ -42,7 +42,7 @@ jobs:
       working-directory: infra
       env:
         TF_VAR_do_token: ${{ env.DO_TOKEN }}
-        TF_VAR_personal_ssh_key_name: ${{ env.DO_PERSONAL_KEY_NAME }}
+        TF_VAR_personal_ssh_key_name: ${{ env.DO_SSH_KEY_FINGERPRINT }}
       run: |
         export TF_VAR_ssh_public_key="$(cat ~/.ssh/gha.pub)"
         terraform apply -auto-approve
