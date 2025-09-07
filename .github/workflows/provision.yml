@@ -36,7 +36,7 @@ jobs:
         echo "GHA_SSH_PUBLIC_KEY=$(cat gha.pub)" >> $GITHUB_ENV
 
     - name: Upload private key artifact (job-scoped)
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: gha-key
         path: |
