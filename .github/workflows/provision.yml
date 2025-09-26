@@ -2,77 +2,79 @@ name: Terraform Infra
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   terraform:
     runs-on: ubuntu-latest
 
+    outputs:
+      droplet_ip: ${{ steps.tfout.outputs.droplet_ip }}
+
     steps:
-    - name: Get Secrets (Bitwarden)
-      uses: bitwarden/sm-action@v2
-      with:
-        access_token: ${{ secrets.BW_ACCESS_TOKEN }}
-        base_url: https://vault.bitwarden.com
-        secrets: |
-          9aae3c8c-e6ad-498b-81f4-b350016b6af6 > DO_TOKEN
-          8ba24b65-ef89-458f-bb78-b350016a8bf0 > DO_SSH_KEY_FINGERPRINT
+      - name: Get Secrets (Bitwarden)
+        uses: bitwarden/sm-action@v2
+        with:
+          access_token: ${{ secrets.BW_ACCESS_TOKEN }}
+          base_url: https://vault.bitwarden.com
+          secrets: |
+            9aae3c8c-e6ad-498b-81f4-b350016b6af6 > DO_TOKEN
+            8ba24b65-ef89-458f-bb78-b350016a8bf0 > DO_SSH_KEY_FINGERPRINT
 
-    - name: Export secrets to job env
-      run: |
-        echo "DO_TOKEN=${DO_TOKEN}" >> $GITHUB_ENV
-        echo "DO_SSH_KEY_FINGERPRINT=${DO_SSH_KEY_FINGERPRINT}" >> $GITHUB_ENV
+      - name: Export secrets to job env
+        run: |
+          echo "DO_TOKEN=${DO_TOKEN}" >> $GITHUB_ENV
+          echo "DO_SSH_KEY_FINGERPRINT=${DO_SSH_KEY_FINGERPRINT}" >> $GITHUB_ENV
 
-    - name: Checkout
-      uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
 
-    - name: Generate ephemeral SSH keypair
-      run: |
-        mkdir -p ~/.ssh
-        ssh-keygen -t ed25519 -f ~/.ssh/gha -N "" -C "gha-$(date +%s)"
-        chmod 600 ~/.ssh/gha
-        cat ~/.ssh/gha.pub > gha.pub
-        echo "GHA_SSH_PRIVATE_KEY=$(cat ~/.ssh/gha)" >> $GITHUB_ENV
-        echo "GHA_SSH_PUBLIC_KEY=$(cat gha.pub)" >> $GITHUB_ENV
+      - name: Generate ephemeral SSH keypair
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -f ~/.ssh/gha -N "" -C "gha-$(date +%s)"
+          chmod 600 ~/.ssh/gha
+          cat ~/.ssh/gha.pub > gha.pub
+          echo "GHA_SSH_PRIVATE_KEY=$(cat ~/.ssh/gha)" >> $GITHUB_ENV
+          echo "GHA_SSH_PUBLIC_KEY=$(cat gha.pub)" >> $GITHUB_ENV
 
-    - name: Upload private key artifact (job-scoped)
-      uses: actions/upload-artifact@v4
-      with:
-        name: gha-key
-        path: |
-          ~/.ssh/gha
-          gha.pub
-        retention-days: 1
-      
+      - name: Upload private key artifact (job-scoped)
+        uses: actions/upload-artifact@v4
+        with:
+          name: gha-key
+          path: |
+            ~/.ssh/gha
+            gha.pub
+          retention-days: 1
 
-    - name: Verify structure
-      run: |
-        pwd
-        ls -la
-        ls -la infra
+      - name: Verify structure
+        run: |
+          pwd
+          ls -la
+          ls -la infra
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
 
-    - name: Terraform Init
-      working-directory: infra
-      run: terraform init -upgrade
+      - name: Terraform Init
+        working-directory: infra
+        run: terraform init -upgrade
 
-    - name: Terraform Apply
-      working-directory: infra
-      env:
-        TF_VAR_do_token: ${{ env.DO_TOKEN }}
-        TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
-        TF_VAR_ssh_public_key: ${{ env.GHA_SSH_PUBLIC_KEY }}
-      run: terraform apply -auto-approve
+      - name: Terraform Apply
+        working-directory: infra
+        env:
+          TF_VAR_do_token: ${{ env.DO_TOKEN }}
+          TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
+          TF_VAR_ssh_public_key: ${{ env.GHA_SSH_PUBLIC_KEY }}
+        run: terraform apply -auto-approve
 
-    - name: Capture Droplet IP from Terraform outputs
-      id: tfout
-      working-directory: infra
-      run: |
-        ip=$(terraform output -raw droplet_ip)    # see outputs.tf below
-        echo "droplet_ip=$ip" >> "$GITHUB_OUTPUT"
-        echo "Resolved droplet_ip=$ip"
+      - name: Capture Droplet IP from Terraform outputs
+        id: tfout
+        working-directory: infra
+        run: |
+          ip=$(terraform output -raw droplet_ip)    # see outputs.tf below
+          echo "droplet_ip=$ip" >> "$GITHUB_OUTPUT"
+          echo "Resolved droplet_ip=$ip"
 
   ansible:
     runs-on: ubuntu-latest
@@ -97,7 +99,8 @@ jobs:
       - name: Write SSH key
         run: |
           mkdir -p ~/.ssh
-          mv id_rsa ~/.ssh/id_rsa
+          mv ./key/gha ~/.ssh/id_rsa
+          mv ./key/gha.pub ~/.ssh/id_rsa.pub
           chmod 600 ~/.ssh/id_rsa
           ls -la ~/.ssh
           cat ~/.ssh/id_rsa.pub

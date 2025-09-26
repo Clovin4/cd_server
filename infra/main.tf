@@ -31,6 +31,7 @@ resource "digitalocean_droplet" "vps" {
   tags               = ["cd", "infra"]
 }
 
+
 output "ip_address" {
   value = digitalocean_droplet.vps.ipv4_address
 }
