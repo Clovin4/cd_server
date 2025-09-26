@@ -33,14 +33,14 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           ssh-keygen -t ed25519 -f ~/.ssh/gha -N "" -C "gha-$(date +%s)"
-          cat ~/.ssh/gha.pub > gha.pub
+          echo "pubkey=$(cat ~/.ssh/gha.pub)" >> "$GITHUB_OUTPUT"
       - name: Upload private key artifact (job-scoped)
         uses: actions/upload-artifact@v4
         with:
           name: gha-key
           path: |
             ~/.ssh/gha
-            gha.pub
+            ~/.ssh/gha.pub
           retention-days: 1
 
       - name: Verify structure
@@ -61,8 +61,8 @@ jobs:
         env:
           TF_VAR_do_token: ${{ env.DO_TOKEN }}
           TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
+          TF_VAR_ssh_public_key: ${{ steps.genkey.outputs.pubkey }}
         run: |
-          export TF_VAR_ssh_public_key="$(cat gha.pub)"
           terraform apply -auto-approve
 
       - name: Capture Droplet IP from Terraform outputs
