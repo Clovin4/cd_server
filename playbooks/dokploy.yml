@@ -38,8 +38,16 @@
         mode: '0755'
         force: true
 
+    - name: Wait for apt locks to be released
+      shell: |
+        while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+          echo "Waiting for apt lock..."
+          sleep 5
+        done
+      changed_when: false
+
     - name: Install Dokploy (first time only)
-      command: "sh {{ dokploy_installer_path }}"
+      shell: "sh {{ dokploy_installer_path }}"
       args:
         creates: "{{ dokploy_marker }}"
 
