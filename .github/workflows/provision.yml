@@ -3,6 +3,19 @@ name: Terraform Infra
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+          - 'apply'
+          - 'destroy'
+
+env:
+  ACTION: ${{ github.event.inputs.action || 'apply' }}
 
 jobs:
   terraform:
@@ -10,8 +23,13 @@ jobs:
 
     outputs:
       droplet_ip: ${{ steps.tfout.outputs.droplet_ip }}
+      action: ${{ steps.set-action.outputs.action }}
 
     steps:
+      - name: Set action output
+        id: set-action
+        run: echo "action=${{ env.ACTION }}" >> "$GITHUB_OUTPUT"
+
       - name: Get Secrets (Bitwarden)
         uses: bitwarden/sm-action@v2
         with:
@@ -27,14 +45,18 @@ jobs:
           echo "DO_SSH_KEY_FINGERPRINT=${DO_SSH_KEY_FINGERPRINT}" >> $GITHUB_ENV
 
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Generate ephemeral SSH keypair
+        if: env.ACTION == 'apply'
+        id: genkey
         run: |
           mkdir -p ~/.ssh
           ssh-keygen -t ed25519 -f ~/.ssh/gha -N "" -C "gha-$(date +%s)"
           echo "pubkey=$(cat ~/.ssh/gha.pub)" >> "$GITHUB_OUTPUT"
+
       - name: Upload private key artifact (job-scoped)
+        if: env.ACTION == 'apply'
         uses: actions/upload-artifact@v4
         with:
           name: gha-key
@@ -42,12 +64,6 @@ jobs:
             ~/.ssh/gha
             ~/.ssh/gha.pub
           retention-days: 1
-
-      - name: Verify structure
-        run: |
-          pwd
-          ls -la
-          ls -la infra
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -57,6 +73,7 @@ jobs:
         run: terraform init -upgrade
 
       - name: Terraform Apply
+        if: env.ACTION == 'apply'
         working-directory: infra
         env:
           TF_VAR_do_token: ${{ env.DO_TOKEN }}
@@ -65,22 +82,34 @@ jobs:
         run: |
           terraform apply -auto-approve
 
+      - name: Terraform Destroy
+        if: env.ACTION == 'destroy'
+        working-directory: infra
+        env:
+          TF_VAR_do_token: ${{ env.DO_TOKEN }}
+          TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
+          TF_VAR_ssh_public_key: "unused"
+        run: |
+          terraform destroy -auto-approve
+
       - name: Capture Droplet IP from Terraform outputs
+        if: env.ACTION == 'apply'
         id: tfout
         working-directory: infra
         run: |
-          ip=$(terraform output -raw droplet_ip)    # see outputs.tf below
+          ip=$(terraform output -raw ip_address)
           echo "droplet_ip=$ip" >> "$GITHUB_OUTPUT"
           echo "Resolved droplet_ip=$ip"
 
   ansible:
     runs-on: ubuntu-latest
     needs: terraform
+    if: needs.terraform.outputs.action == 'apply'
     env:
       DOKPLOY_HOST: ${{ needs.terraform.outputs.droplet_ip }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install Ansible
         run: |
@@ -88,7 +117,7 @@ jobs:
           sudo apt-get install -y ansible
 
       - name: Download SSH key artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: gha-key
           path: ./key
@@ -100,8 +129,7 @@ jobs:
           mv ./key/gha.pub ~/.ssh/id_rsa.pub
           chmod 600 ~/.ssh/id_rsa
           ls -la ~/.ssh
-          cat ~/.ssh/id_rsa.pub
-      # Option A: inline inventory (no file on disk)
+
       - name: Run Ansible playbook (inline inventory)
         run: |
           ansible-playbook \
@@ -109,10 +137,3 @@ jobs:
             -e ansible_user=root \
             -e ansible_ssh_private_key_file=~/.ssh/id_rsa \
             playbooks/dokploy.yml
-
-      # Option B (alt): generate inventory.ini dynamically
-      # - name: Generate inventory.ini and run
-      #   run: |
-      #     echo "[dokploy_hosts]" > inventory.ini
-      #     echo "dokploy-01 ansible_host=${DOKPLOY_HOST} ansible_user=root" >> inventory.ini
-      #     ansible-playbook -i inventory.ini playbooks/dokploy.yml
