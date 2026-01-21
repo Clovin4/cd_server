@@ -6,13 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Action to perform'
+        description: "Action to perform"
         required: true
-        default: 'apply'
+        default: "apply"
         type: choice
         options:
-          - 'apply'
-          - 'destroy'
+          - "apply"
+          - "destroy"
 
 env:
   ACTION: ${{ github.event.inputs.action || 'apply' }}
@@ -38,6 +38,9 @@ jobs:
           secrets: |
             9aae3c8c-e6ad-498b-81f4-b350016b6af6 > DO_TOKEN
             8ba24b65-ef89-458f-bb78-b350016a8bf0 > DO_SSH_KEY_FINGERPRINT
+            5e5ed78b-2b00-4b79-92fe-b3d9002e2787 > DO_SPACES_ACCESS_KEY
+            d8be869f-c376-4acf-8a01-b3d9002dfc71 > DO_SPACES_SECRET_KEY
+            12138ca7-50d2-45ce-a231-b3d900307a3a > SSH_PRIVATE_KEY
 
       - name: Export secrets to job env
         run: |
@@ -47,38 +50,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate ephemeral SSH keypair
-        if: env.ACTION == 'apply'
-        id: genkey
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
-          ssh-keygen -t ed25519 -f ~/.ssh/gha -N "" -C "gha-$(date +%s)"
-          echo "pubkey=$(cat ~/.ssh/gha.pub)" >> "$GITHUB_OUTPUT"
-
-      - name: Upload private key artifact (job-scoped)
-        if: env.ACTION == 'apply'
-        uses: actions/upload-artifact@v4
-        with:
-          name: gha-key
-          path: |
-            ~/.ssh/gha
-            ~/.ssh/gha.pub
-          retention-days: 1
+          echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
         working-directory: infra
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
         run: terraform init -upgrade
 
       - name: Terraform Apply
         if: env.ACTION == 'apply'
         working-directory: infra
         env:
+          AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
           TF_VAR_do_token: ${{ env.DO_TOKEN }}
           TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
-          TF_VAR_ssh_public_key: ${{ steps.genkey.outputs.pubkey }}
         run: |
           terraform apply -auto-approve
 
@@ -86,9 +81,10 @@ jobs:
         if: env.ACTION == 'destroy'
         working-directory: infra
         env:
+          AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
           TF_VAR_do_token: ${{ env.DO_TOKEN }}
           TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
-          TF_VAR_ssh_public_key: "unused"
         run: |
           terraform destroy -auto-approve
 
@@ -96,6 +92,9 @@ jobs:
         if: env.ACTION == 'apply'
         id: tfout
         working-directory: infra
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
         run: |
           ip=$(terraform output -raw ip_address)
           echo "droplet_ip=$ip" >> "$GITHUB_OUTPUT"
@@ -108,6 +107,14 @@ jobs:
     env:
       DOKPLOY_HOST: ${{ needs.terraform.outputs.droplet_ip }}
     steps:
+      - name: Get Secrets (Bitwarden)
+        uses: bitwarden/sm-action@v2
+        with:
+          access_token: ${{ secrets.BW_ACCESS_TOKEN }}
+          base_url: https://vault.bitwarden.com
+          secrets: |
+            <SSH_PRIVATE_KEY_UUID> > SSH_PRIVATE_KEY
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -116,19 +123,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ansible
 
-      - name: Download SSH key artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: gha-key
-          path: ./key
-
-      - name: Write SSH key
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
-          mv ./key/gha ~/.ssh/id_rsa
-          mv ./key/gha.pub ~/.ssh/id_rsa.pub
+          echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ls -la ~/.ssh
 
       - name: Run Ansible playbook (inline inventory)
         env:

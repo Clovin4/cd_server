@@ -29,9 +29,3 @@ variable "image" {
   type    = string
   default = "ubuntu-22-04-x64"
 }
-
-# Ephemeral SSH key pair for CI/CD access
-variable "ssh_public_key" {
-  description = "Ephemeral public key from CI"
-  type        = string
-}
