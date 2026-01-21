@@ -36,7 +36,7 @@
         url: "{{ dokploy_installer_url }}"
         dest: "{{ dokploy_installer_path }}"
         mode: '0755'
-      force: yes
+        force: true
 
     - name: Install Dokploy (first time only)
       command: "sh {{ dokploy_installer_path }}"
