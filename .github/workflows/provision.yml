@@ -131,6 +131,8 @@ jobs:
           ls -la ~/.ssh
 
       - name: Run Ansible playbook (inline inventory)
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "false"
         run: |
           ansible-playbook \
             -i "${DOKPLOY_HOST}," \
