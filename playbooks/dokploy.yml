@@ -16,6 +16,25 @@
     remove_ci_key_after_bootstrap: false
 
   tasks:
+    - name: Wait for cloud-init to finish
+      command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    - name: Stop unattended-upgrades if running
+      systemd:
+        name: unattended-upgrades
+        state: stopped
+      failed_when: false
+
+    - name: Wait for apt locks to be released
+      shell: |
+        while fuser /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; do
+          echo "Waiting for apt locks..."
+          sleep 5
+        done
+      changed_when: false
+
     - name: Base deps
       apt:
         name: [ca-certificates, curl, ufw]
@@ -37,14 +56,6 @@
         dest: "{{ dokploy_installer_path }}"
         mode: '0755'
         force: true
-
-    - name: Wait for apt locks to be released
-      shell: |
-        while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-          echo "Waiting for apt lock..."
-          sleep 5
-        done
-      changed_when: false
 
     - name: Install Dokploy (first time only)
       shell: "sh {{ dokploy_installer_path }}"
