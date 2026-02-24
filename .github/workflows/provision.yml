@@ -142,6 +142,7 @@ jobs:
                   mkdir -p ~/.ssh
                   echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_rsa
                   chmod 600 ~/.ssh/id_rsa
+                  ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub
 
             - name: Run server setup playbook against all VMs
               env:
