@@ -1,140 +1,161 @@
 name: Terraform Infra
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-    inputs:
-      action:
-        description: "Action to perform"
-        required: true
-        default: "apply"
-        type: choice
-        options:
-          - "apply"
-          - "destroy"
+    push:
+        branches: [main]
+    workflow_dispatch:
+        inputs:
+            action:
+                description: "Action to perform"
+                required: true
+                default: "apply"
+                type: choice
+                options:
+                    - "apply"
+                    - "destroy"
 
 env:
-  ACTION: ${{ github.event.inputs.action || 'apply' }}
+    ACTION: ${{ github.event.inputs.action || 'apply' }}
 
 jobs:
-  terraform:
-    runs-on: ubuntu-latest
+    terraform:
+        runs-on: ubuntu-latest
 
-    outputs:
-      droplet_ip: ${{ steps.tfout.outputs.droplet_ip }}
-      action: ${{ steps.set-action.outputs.action }}
+        outputs:
+            vm_ips: ${{ steps.tfout.outputs.vm_ips }}
+            action: ${{ steps.set-action.outputs.action }}
 
-    steps:
-      - name: Set action output
-        id: set-action
-        run: echo "action=${{ env.ACTION }}" >> "$GITHUB_OUTPUT"
+        steps:
+            - name: Set action output
+              id: set-action
+              run: echo "action=${{ env.ACTION }}" >> "$GITHUB_OUTPUT"
 
-      - name: Get Secrets (Bitwarden)
-        uses: bitwarden/sm-action@v2
-        with:
-          access_token: ${{ secrets.BW_ACCESS_TOKEN }}
-          base_url: https://vault.bitwarden.com
-          secrets: |
-            9aae3c8c-e6ad-498b-81f4-b350016b6af6 > DO_TOKEN
-            8ba24b65-ef89-458f-bb78-b350016a8bf0 > DO_SSH_KEY_FINGERPRINT
-            5e5ed78b-2b00-4b79-92fe-b3d9002e2787 > DO_SPACES_ACCESS_KEY
-            d8be869f-c376-4acf-8a01-b3d9002dfc71 > DO_SPACES_SECRET_KEY
-            12138ca7-50d2-45ce-a231-b3d900307a3a > SSH_PRIVATE_KEY
+            - name: Checkout
+              uses: actions/checkout@v4
 
-      - name: Export secrets to job env
-        run: |
-          echo "DO_TOKEN=${DO_TOKEN}" >> $GITHUB_ENV
-          echo "DO_SSH_KEY_FINGERPRINT=${DO_SSH_KEY_FINGERPRINT}" >> $GITHUB_ENV
+            - name: Get Secrets (Bitwarden)
+              uses: bitwarden/sm-action@v2
+              with:
+                  access_token: ${{ secrets.BW_ACCESS_TOKEN }}
+                  base_url: https://vault.bitwarden.com
+                  secrets: |
+                      9aae3c8c-e6ad-498b-81f4-b350016b6af6 > DO_TOKEN
+                      8ba24b65-ef89-458f-bb78-b350016a8bf0 > DO_SSH_KEY_FINGERPRINT
+                      5e5ed78b-2b00-4b79-92fe-b3d9002e2787 > DO_SPACES_ACCESS_KEY
+                      d8be869f-c376-4acf-8a01-b3d9002dfc71 > DO_SPACES_SECRET_KEY
 
-      - name: Checkout
-        uses: actions/checkout@v4
+            - name: Setup Terraform
+              uses: hashicorp/setup-terraform@v3
 
-      - name: Setup SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+            - name: Ensure Spaces state bucket exists
+              env:
+                  SPACES_ACCESS_KEY: ${{ env.DO_SPACES_ACCESS_KEY }}
+                  SPACES_SECRET_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
+              run: |
+                  # Install doctl
+                  curl -sL https://github.com/digitalocean/doctl/releases/download/v1.119.0/doctl-1.119.0-linux-amd64.tar.gz | tar -xz
+                  sudo mv doctl /usr/local/bin
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+                  # Use the Spaces keys directly with the S3-compatible API to check/create
+                  # the bucket — no DO API token required for this operation.
+                  aws configure set aws_access_key_id "$SPACES_ACCESS_KEY"
+                  aws configure set aws_secret_access_key "$SPACES_SECRET_KEY"
 
-      - name: Terraform Init
-        working-directory: infra
-        env:
-          AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
-        run: terraform init -upgrade
+                  if aws s3api head-bucket \
+                      --bucket lazy1-tfstate \
+                      --endpoint-url https://nyc3.digitaloceanspaces.com 2>/dev/null; then
+                    echo "✓ Bucket lazy1-tfstate already exists"
+                  else
+                    echo "Bucket not found — creating lazy1-tfstate in nyc3..."
+                    aws s3api create-bucket \
+                      --bucket lazy1-tfstate \
+                      --endpoint-url https://nyc3.digitaloceanspaces.com
+                    echo "✓ Bucket created"
+                  fi
 
-      - name: Terraform Apply
-        if: env.ACTION == 'apply'
-        working-directory: infra
-        env:
-          AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
-          TF_VAR_do_token: ${{ env.DO_TOKEN }}
-          TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
-        run: |
-          terraform apply -auto-approve
+            - name: Terraform Init
+              working-directory: infra
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
+                  AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
+              run: terraform init -upgrade
 
-      - name: Terraform Destroy
-        if: env.ACTION == 'destroy'
-        working-directory: infra
-        env:
-          AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
-          TF_VAR_do_token: ${{ env.DO_TOKEN }}
-          TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
-        run: |
-          terraform destroy -auto-approve
+            - name: Terraform Apply
+              if: env.ACTION == 'apply'
+              working-directory: infra
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
+                  AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
+                  TF_VAR_do_token: ${{ env.DO_TOKEN }}
+                  TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
+              run: terraform apply -auto-approve
 
-      - name: Capture Droplet IP from Terraform outputs
-        if: env.ACTION == 'apply'
-        id: tfout
-        working-directory: infra
-        env:
-          AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
-        run: |
-          ip=$(terraform output -raw ip_address)
-          echo "droplet_ip=$ip" >> "$GITHUB_OUTPUT"
-          echo "Resolved droplet_ip=$ip"
+            - name: Terraform Destroy
+              if: env.ACTION == 'destroy'
+              working-directory: infra
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
+                  AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
+                  TF_VAR_do_token: ${{ env.DO_TOKEN }}
+                  TF_VAR_ssh_key_fingerprint: ${{ env.DO_SSH_KEY_FINGERPRINT }}
+              run: terraform destroy -auto-approve
 
-  ansible:
-    runs-on: ubuntu-latest
-    needs: terraform
-    if: needs.terraform.outputs.action == 'apply'
-    env:
-      DOKPLOY_HOST: ${{ needs.terraform.outputs.droplet_ip }}
-    steps:
-      - name: Get Secrets (Bitwarden)
-        uses: bitwarden/sm-action@v2
-        with:
-          access_token: ${{ secrets.BW_ACCESS_TOKEN }}
-          base_url: https://vault.bitwarden.com
-          secrets: |
-            12138ca7-50d2-45ce-a231-b3d900307a3a > SSH_PRIVATE_KEY
+            - name: Show VM IPs
+              if: env.ACTION == 'apply'
+              id: tfout
+              working-directory: infra
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ env.DO_SPACES_ACCESS_KEY }}
+                  AWS_SECRET_ACCESS_KEY: ${{ env.DO_SPACES_SECRET_KEY }}
+              run: |
+                  echo "=== VM Public IPs ===" && terraform output -json vm_ips
+                  echo ""
+                  echo "=== /etc/hosts block ===" && terraform output -raw hosts_file_entries
+                  echo ""
+                  echo "=== ~/.ssh/config block ===" && terraform output -raw ssh_config
+                  echo "vm_ips=$(terraform output -json vm_ips)" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout
-        uses: actions/checkout@v4
+    ansible:
+        runs-on: ubuntu-latest
+        needs: terraform
+        if: needs.terraform.outputs.action == 'apply'
 
-      - name: Install Ansible
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
 
-      - name: Setup SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+            - name: Get Secrets (Bitwarden)
+              uses: bitwarden/sm-action@v2
+              with:
+                  access_token: ${{ secrets.BW_ACCESS_TOKEN }}
+                  base_url: https://vault.bitwarden.com
+                  secrets: |
+                      12138ca7-50d2-45ce-a231-b3d900307a3a > SSH_PRIVATE_KEY
 
-      - name: Run Ansible playbook (inline inventory)
-        env:
-          ANSIBLE_HOST_KEY_CHECKING: "false"
-        run: |
-          ansible-playbook \
-            -i "${DOKPLOY_HOST}," \
-            -e ansible_user=root \
-            -e ansible_ssh_private_key_file=~/.ssh/id_rsa \
-            playbooks/dokploy.yml
+            - name: Install Ansible
+              run: |
+                  sudo apt-get update -q
+                  sudo apt-get install -y ansible
+
+            - name: Setup SSH key
+              run: |
+                  mkdir -p ~/.ssh
+                  echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_rsa
+                  chmod 600 ~/.ssh/id_rsa
+
+            - name: Run server setup playbook against all VMs
+              env:
+                  ANSIBLE_HOST_KEY_CHECKING: "false"
+                  VM_IPS: ${{ needs.terraform.outputs.vm_ips }}
+              run: |
+                  # Build a comma-separated inventory from the JSON ip map
+                  INVENTORY=$(echo "$VM_IPS" | python3 -c "
+                  import json, sys
+                  ips = json.load(sys.stdin)
+                  print(','.join(ips.values()) + ',')
+                  ")
+                  ansible-playbook \
+                    -i "$INVENTORY" \
+                    -e ansible_user=root \
+                    -e ansible_ssh_private_key_file=~/.ssh/id_rsa \
+                    playbooks/setup.yml

@@ -1,0 +1,236 @@
+- name: Production Server Baseline
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    # ── User ──────────────────────────────────────────────────────────────────
+    deploy_user: deploy
+    deploy_password: "" # Leave empty if you only use SSH keys
+    authorized_keys_file: ~/.ssh/id_rsa.pub # Local path to copy to the new user
+
+    # ── SSH ───────────────────────────────────────────────────────────────────
+    ssh_port: 22
+    permit_root_login: "no"
+    password_authentication: "no"
+    max_auth_tries: 3
+    login_grace_time: 30
+
+    # ── Firewall ──────────────────────────────────────────────────────────────
+    ufw_allow_ports:
+      - "{{ ssh_port }}/tcp"
+      - "80/tcp"
+      - "443/tcp"
+
+    # ── Fail2ban ──────────────────────────────────────────────────────────────
+    fail2ban_bantime: "1h"
+    fail2ban_findtime: "10m"
+    fail2ban_maxretry: 3
+
+    # ── Sysctl ────────────────────────────────────────────────────────────────
+    sysctl_settings:
+      net.ipv4.icmp_echo_ignore_broadcasts: 1
+      net.ipv4.icmp_ignore_bogus_error_responses: 1
+      net.ipv4.tcp_syncookies: 1
+      net.ipv4.conf.all.accept_source_route: 0
+      net.ipv6.conf.all.accept_source_route: 0
+      net.ipv4.conf.all.accept_redirects: 0
+      net.ipv6.conf.all.accept_redirects: 0
+      net.ipv4.conf.all.send_redirects: 0
+      net.ipv4.conf.all.log_martians: 1
+      net.ipv4.ip_forward: 0
+
+  tasks:
+    # ── Wait for the system to be ready ──────────────────────────────────────
+    - name: Wait for cloud-init to finish
+      command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    - name: Stop unattended-upgrades if running
+      systemd:
+        name: unattended-upgrades
+        state: stopped
+      failed_when: false
+
+    - name: Wait for apt locks to be released
+      shell: |
+        while fuser /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend \
+                    /var/lib/apt/lists/lock /var/cache/apt/archives/lock \
+                    >/dev/null 2>&1; do
+          echo "Waiting for apt locks..."
+          sleep 5
+        done
+      changed_when: false
+
+    # ── Packages ─────────────────────────────────────────────────────────────
+    - name: Update apt cache and upgrade packages
+      apt:
+        update_cache: yes
+        upgrade: safe
+
+    - name: Install baseline packages
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - ufw
+          - fail2ban
+          - unattended-upgrades
+          - apt-listchanges
+        state: present
+
+    # ── Non-root sudo user ────────────────────────────────────────────────────
+    - name: Create deploy user
+      user:
+        name: "{{ deploy_user }}"
+        groups: sudo
+        shell: /bin/bash
+        create_home: yes
+        state: present
+
+    - name: Set authorized SSH key for deploy user
+      authorized_key:
+        user: "{{ deploy_user }}"
+        state: present
+        key: "{{ lookup('file', authorized_keys_file) }}"
+
+    - name: Allow deploy user to sudo without password
+      lineinfile:
+        path: /etc/sudoers.d/{{ deploy_user }}
+        line: "{{ deploy_user }} ALL=(ALL) NOPASSWD:ALL"
+        create: yes
+        mode: "0440"
+        validate: "visudo -cf %s"
+
+    # ── SSH hardening ─────────────────────────────────────────────────────────
+    - name: Write SSH hardening config drop-in
+      copy:
+        dest: /etc/ssh/sshd_config.d/hardening.conf
+        mode: "0644"
+        content: |
+          Port {{ ssh_port }}
+          Protocol 2
+          PermitRootLogin {{ permit_root_login }}
+          PasswordAuthentication {{ password_authentication }}
+          PermitEmptyPasswords no
+          MaxAuthTries {{ max_auth_tries }}
+          LoginGraceTime {{ login_grace_time }}
+          X11Forwarding no
+          AllowUsers {{ deploy_user }}
+          PubkeyAuthentication yes
+          AuthorizedKeysFile .ssh/authorized_keys
+          HostbasedAuthentication no
+          IgnoreRhosts yes
+          ClientAliveInterval 300
+          ClientAliveCountMax 2
+      notify: Restart sshd
+
+    # ── Kernel / sysctl hardening ─────────────────────────────────────────────
+    - name: Apply sysctl hardening settings
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_file: /etc/sysctl.d/99-hardening.conf
+        reload: yes
+      loop: "{{ sysctl_settings | dict2items }}"
+
+    # ── UFW firewall ──────────────────────────────────────────────────────────
+    - name: Reset UFW to defaults
+      ufw:
+        state: reset
+
+    - name: Set UFW default — deny inbound
+      ufw:
+        default: deny
+        direction: incoming
+
+    - name: Set UFW default — allow outbound
+      ufw:
+        default: allow
+        direction: outgoing
+
+    - name: Allow required ports
+      ufw:
+        rule: allow
+        port: "{{ item.split('/')[0] }}"
+        proto: "{{ item.split('/')[1] }}"
+      loop: "{{ ufw_allow_ports }}"
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    # ── Fail2ban ──────────────────────────────────────────────────────────────
+    - name: Write fail2ban jail.local
+      copy:
+        dest: /etc/fail2ban/jail.local
+        mode: "0644"
+        content: |
+          [DEFAULT]
+          banaction  = ufw
+          bantime    = {{ fail2ban_bantime }}
+          findtime   = {{ fail2ban_findtime }}
+          maxretry   = {{ fail2ban_maxretry }}
+          ignoreip   = 127.0.0.1/8 ::1
+
+          [sshd]
+          enabled  = true
+          port     = {{ ssh_port }}
+          logpath  = %(sshd_log)s
+          backend  = systemd
+      notify: Restart fail2ban
+
+    - name: Enable and start fail2ban
+      systemd:
+        name: fail2ban
+        enabled: yes
+        state: started
+
+    # ── Automatic security updates ────────────────────────────────────────────
+    - name: Enable unattended-upgrades for security packages
+      copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        mode: "0644"
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          APT::Periodic::AutocleanInterval "7";
+
+    - name: Enable and start unattended-upgrades
+      systemd:
+        name: unattended-upgrades
+        enabled: yes
+        state: started
+
+    # ── Final checks ──────────────────────────────────────────────────────────
+    - name: Verify UFW is active
+      command: ufw status
+      register: ufw_status
+      changed_when: false
+
+    - name: Print UFW status
+      debug:
+        msg: "{{ ufw_status.stdout_lines }}"
+
+    - name: Verify fail2ban is running
+      command: fail2ban-client status sshd
+      register: f2b_status
+      changed_when: false
+      failed_when: false
+
+    - name: Print fail2ban status
+      debug:
+        msg: "{{ f2b_status.stdout_lines }}"
+
+  handlers:
+    - name: Restart sshd
+      systemd:
+        name: sshd
+        state: restarted
+
+    - name: Restart fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted
