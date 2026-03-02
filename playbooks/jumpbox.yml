@@ -8,31 +8,32 @@
     # Repo cloned under the deploy user's home — keeps it accessible without sudo
     # and consistent with how the tutorial is run (as deploy, not root).
     kthw_dir: /home/deploy/kubernetes-the-hard-way
-    # jumpbox_private_key is injected by the CI pipeline at runtime:
-    #   -e "jumpbox_private_key={{ lookup('file', '/tmp/jumpbox_id_ed25519') }}"
-    # This is the private half of the keypair whose public key was already
-    # pushed to all nodes' deploy authorized_keys during setup.yml.
-    jumpbox_private_key: ""
+    # jumpbox_private_key_b64 is the base64-encoded private key injected by CI:
+    #   JUMPBOX_PRIVKEY_B64=$(base64 -w0 /tmp/jumpbox_id_ed25519)
+    #   -e "jumpbox_private_key_b64=${JUMPBOX_PRIVKEY_B64}"
+    # Base64 avoids the multiline/newline mangling that happens when a PEM key
+    # is passed directly as a shell variable into an Ansible extra-vars string.
+    jumpbox_private_key_b64: ""
 
   tasks:
     # ── Jumpbox SSH identity ───────────────────────────────────────────────────
-    # Place the pre-generated jumpbox private key so deploy can reach the cluster.
-    # The matching public key was already authorized on all nodes during setup.yml.
+    # Decode the base64 key and write it directly — bypasses all shell quoting.
+    # The b64decode filter preserves exact byte content including newlines.
     - name: Place jumpbox SSH private key
       copy:
-        content: "{{ jumpbox_private_key }}\n"
+        content: "{{ jumpbox_private_key_b64 | b64decode }}"
         dest: /home/{{ deploy_user }}/.ssh/id_ed25519
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
         mode: "0600"
-      when: jumpbox_private_key | length > 0
-      no_log: true  # Don't echo the private key to the Actions log
+      when: jumpbox_private_key_b64 | length > 0
+      no_log: true  # Don't echo the decoded key to the Actions log
 
     - name: Derive and place jumpbox SSH public key
       shell: ssh-keygen -y -f /home/{{ deploy_user }}/.ssh/id_ed25519
       register: derived_pubkey
       changed_when: false
-      when: jumpbox_private_key | length > 0
+      when: jumpbox_private_key_b64 | length > 0
 
     - name: Write derived public key
       copy:
@@ -41,7 +42,7 @@
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
         mode: "0644"
-      when: jumpbox_private_key | length > 0
+      when: jumpbox_private_key_b64 | length > 0
 
     # ── Jumpbox tooling ───────────────────────────────────────────────────────
     - name: Install jumpbox packages
