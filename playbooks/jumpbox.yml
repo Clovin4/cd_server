@@ -94,10 +94,21 @@
       shell: find {{ kthw_dir }}/downloads -type f ! -name "*.tar.gz" -exec chmod +x {} \;
       changed_when: false
 
+    - name: List downloaded files
+      command: find {{ kthw_dir }}/downloads -type f
+      register: downloaded_files
+      changed_when: false
+
+    - name: Show downloaded files
+      debug:
+        msg: "{{ downloaded_files.stdout_lines }}"
+
     # ── Install kubectl on the jumpbox ────────────────────────────────────────
+    # Binaries are downloaded flat into kthw_dir/downloads/ by wget -P.
+    # There is no client/ subdirectory — kubectl lands directly in downloads/.
     - name: Install kubectl to /usr/local/bin
       copy:
-        src: "{{ kthw_dir }}/downloads/client/kubectl"
+        src: "{{ kthw_dir }}/downloads/kubectl"
         dest: /usr/local/bin/kubectl
         mode: "0755"
         remote_src: true
@@ -111,3 +122,15 @@
     - name: Print kubectl version
       debug:
         msg: "{{ kubectl_version.stdout }}"
+
+    # ── Sanity checks ─────────────────────────────────────────────────────────
+    - name: Verify sshd is running on jumpbox
+      systemd:
+        name: sshd
+        state: started
+      register: sshd_state
+
+    - name: Ensure sshd is enabled
+      systemd:
+        name: sshd
+        enabled: true
