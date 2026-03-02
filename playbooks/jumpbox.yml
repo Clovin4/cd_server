@@ -1,5 +1,6 @@
 - name: Setup Jumpbox for KtHW
   hosts: jumpbox
+  remote_user: deploy
   become: true
   gather_facts: true
 

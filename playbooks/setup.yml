@@ -1,5 +1,11 @@
 - name: Production Server Baseline
   hosts: all
+  # Always connect as root — this is the bootstrap play that runs before deploy
+  # exists. On re-runs against already-hardened nodes root will be locked out;
+  # ignore_unreachable lets the play skip those hosts cleanly rather than
+  # failing the whole pipeline. jumpbox.yml and network.yml connect as deploy.
+  remote_user: root
+  ignore_unreachable: true
   become: true
   gather_facts: true
 

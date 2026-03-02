@@ -205,14 +205,13 @@ jobs:
               'control_plane',
               'workers',
               '',
-              # all:children includes jumpbox so site.yml plays that target
-              # all hosts still work, but jumpbox is not double-declared.
               '[all:children]',
               'jumpbox',
               'cluster',
               '',
+              # ansible_user is NOT set here — each play declares its own
+              # remote_user (root for setup.yml, deploy for everything after).
               '[all:vars]',
-              'ansible_user=root',
               'ansible_ssh_private_key_file=~/.ssh/id_rsa',
               'ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new',
           ]

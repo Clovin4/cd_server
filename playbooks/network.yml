@@ -15,6 +15,7 @@
 # own hosts file, otherwise our changes will be clobbered on the next reboot.
 - name: Configure hostnames
   hosts: all
+  remote_user: deploy
   become: true
   gather_facts: true
 
@@ -57,6 +58,7 @@
 # SCP loops required.
 - name: Distribute /etc/hosts
   hosts: all
+  remote_user: deploy
   become: true
   gather_facts: false
 
@@ -97,6 +99,7 @@
 # and generates machines.txt in the KtHW working directory.
 - name: Configure jumpbox for cluster access
   hosts: jumpbox
+  remote_user: deploy
   become: true
   gather_facts: false
 
