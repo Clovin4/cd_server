@@ -1,0 +1,111 @@
+- name: Setup Jumpbox for KtHW
+  hosts: jumpbox
+  become: true
+  gather_facts: true
+
+  vars:
+    deploy_user: deploy
+    # Repo cloned under the deploy user's home — keeps it accessible without sudo
+    # and consistent with how the tutorial is run (as deploy, not root).
+    kthw_dir: /home/deploy/kubernetes-the-hard-way
+    # jumpbox_private_key is injected by the CI pipeline at runtime:
+    #   -e "jumpbox_private_key={{ lookup('file', '/tmp/jumpbox_id_ed25519') }}"
+    # This is the private half of the keypair whose public key was already
+    # pushed to all nodes' deploy authorized_keys during setup.yml.
+    jumpbox_private_key: ""
+
+  tasks:
+    # ── Jumpbox SSH identity ───────────────────────────────────────────────────
+    # Place the pre-generated jumpbox private key so deploy can reach the cluster.
+    # The matching public key was already authorized on all nodes during setup.yml.
+    - name: Place jumpbox SSH private key
+      copy:
+        content: "{{ jumpbox_private_key }}\n"
+        dest: /home/{{ deploy_user }}/.ssh/id_ed25519
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0600"
+      when: jumpbox_private_key | length > 0
+      no_log: true  # Don't echo the private key to the Actions log
+
+    - name: Derive and place jumpbox SSH public key
+      shell: ssh-keygen -y -f /home/{{ deploy_user }}/.ssh/id_ed25519
+      register: derived_pubkey
+      changed_when: false
+      when: jumpbox_private_key | length > 0
+
+    - name: Write derived public key
+      copy:
+        content: "{{ derived_pubkey.stdout }}\n"
+        dest: /home/{{ deploy_user }}/.ssh/id_ed25519.pub
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0644"
+      when: jumpbox_private_key | length > 0
+
+    # ── Jumpbox tooling ───────────────────────────────────────────────────────
+    - name: Install jumpbox packages
+      apt:
+        name:
+          - git
+          - curl
+          - wget
+          - vim
+          - openssl
+        state: present
+        update_cache: true
+
+    # ── KtHW tutorial repo ────────────────────────────────────────────────────
+    - name: Clone KtHW tutorial repo (shallow)
+      git:
+        repo: https://github.com/kelseyhightower/kubernetes-the-hard-way.git
+        dest: "{{ kthw_dir }}"
+        depth: 1
+        force: false
+      become_user: "{{ deploy_user }}"
+
+    - name: Ensure kthw_dir is owned by deploy
+      file:
+        path: "{{ kthw_dir }}"
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        recurse: yes
+
+    # ── Download Kubernetes binaries ──────────────────────────────────────────
+    # Downloads ~500MB of pre-built binaries to kthw_dir/downloads/.
+    # The creates: guard makes this idempotent — skipped on re-runs if the
+    # directory already exists (avoids re-downloading on every pipeline run).
+    - name: Download all Kubernetes binaries
+      shell: |
+        ARCH=$(dpkg --print-architecture)
+        wget -q --show-progress \
+          --https-only \
+          --timestamping \
+          -P downloads \
+          -i downloads-${ARCH}.txt
+      args:
+        chdir: "{{ kthw_dir }}"
+        creates: "{{ kthw_dir }}/downloads"
+      become_user: "{{ deploy_user }}"
+
+    - name: Set executable bit on all downloaded binaries
+      shell: find {{ kthw_dir }}/downloads -type f ! -name "*.tar.gz" -exec chmod +x {} \;
+      changed_when: false
+
+    # ── Install kubectl on the jumpbox ────────────────────────────────────────
+    - name: Install kubectl to /usr/local/bin
+      copy:
+        src: "{{ kthw_dir }}/downloads/client/kubectl"
+        dest: /usr/local/bin/kubectl
+        mode: "0755"
+        remote_src: true
+
+    - name: Verify kubectl installation
+      command: kubectl version --client
+      register: kubectl_version
+      changed_when: false
+      become_user: "{{ deploy_user }}"
+
+    - name: Print kubectl version
+      debug:
+        msg: "{{ kubectl_version.stdout }}"

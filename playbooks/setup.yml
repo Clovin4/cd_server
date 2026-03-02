@@ -6,14 +6,20 @@
   vars:
     # ── User ──────────────────────────────────────────────────────────────────
     deploy_user: deploy
-    deploy_password: "" # Leave empty if you only use SSH keys
-    authorized_keys_file: ~/.ssh/id_rsa.pub # Local path to copy to the new user
+    # Primary key: the Ansible controller's public key (CI runner or local machine).
+    # This file is read from the controller at runtime via lookup('file', ...).
+    authorized_keys_file: ~/.ssh/id_rsa.pub
+    # Additional keys to authorize — pass at runtime via -e or group_vars.
+    # The jumpbox ed25519 key is injected here by the CI pipeline so that all
+    # nodes trust the jumpbox from the moment hardening locks out root.
+    # Example: -e '{"extra_authorized_keys": ["ssh-ed25519 AAAA..."]}'
+    extra_authorized_keys: []
 
     # ── SSH ───────────────────────────────────────────────────────────────────
     ssh_port: 22
     permit_root_login: "no"
     password_authentication: "no"
-    max_auth_tries: 3
+    max_auth_tries: 5
     login_grace_time: 30
 
     # ── Firewall ──────────────────────────────────────────────────────────────
@@ -25,9 +31,12 @@
     # ── Fail2ban ──────────────────────────────────────────────────────────────
     fail2ban_bantime: "1h"
     fail2ban_findtime: "10m"
-    fail2ban_maxretry: 3
+    fail2ban_maxretry: 5
 
     # ── Sysctl ────────────────────────────────────────────────────────────────
+    # Note: net.ipv4.ip_forward is set to 0 here (secure default).
+    # The worker node setup playbook (future step) will set it to 1 on node-0/node-1
+    # as required for Kubernetes pod networking.
     sysctl_settings:
       net.ipv4.icmp_echo_ignore_broadcasts: 1
       net.ipv4.icmp_ignore_bogus_error_responses: 1
@@ -41,7 +50,7 @@
       net.ipv4.ip_forward: 0
 
   tasks:
-    # ── Wait for the system to be ready ──────────────────────────────────────
+    # ── Wait for the system to be ready ───────────────────────────────────────
     - name: Wait for cloud-init to finish
       command: cloud-init status --wait
       changed_when: false
@@ -63,7 +72,7 @@
         done
       changed_when: false
 
-    # ── Packages ─────────────────────────────────────────────────────────────
+    # ── Packages ──────────────────────────────────────────────────────────────
     - name: Update apt cache and upgrade packages
       apt:
         update_cache: yes
@@ -89,11 +98,30 @@
         create_home: yes
         state: present
 
-    - name: Set authorized SSH key for deploy user
+    - name: Ensure .ssh directory exists for deploy user
+      file:
+        path: /home/{{ deploy_user }}/.ssh
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0700"
+
+    - name: Authorize controller SSH key for deploy user
       authorized_key:
         user: "{{ deploy_user }}"
         state: present
         key: "{{ lookup('file', authorized_keys_file) }}"
+
+    # Authorize any extra keys passed at runtime (e.g. the jumpbox ed25519 key).
+    # This runs before SSH hardening locks out root, so all trusted keys are in
+    # place before AllowUsers deploy takes effect.
+    - name: Authorize extra SSH keys for deploy user
+      authorized_key:
+        user: "{{ deploy_user }}"
+        state: present
+        key: "{{ item }}"
+      loop: "{{ extra_authorized_keys }}"
+      when: extra_authorized_keys | length > 0
 
     - name: Allow deploy user to sudo without password
       lineinfile:
@@ -104,6 +132,12 @@
         validate: "visudo -cf %s"
 
     # ── SSH hardening ─────────────────────────────────────────────────────────
+    # Written as a drop-in so it survives openssh-server package updates.
+    # The main /etc/ssh/sshd_config is left untouched.
+    - name: Validate sshd config before writing drop-in
+      command: sshd -t
+      changed_when: false
+
     - name: Write SSH hardening config drop-in
       copy:
         dest: /etc/ssh/sshd_config.d/hardening.conf

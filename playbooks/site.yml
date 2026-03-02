@@ -1,0 +1,28 @@
+# site.yml — Master playbook for the KtHW lab environment
+#
+# Execution order:
+#   1. setup.yml   — hardening baseline on all nodes (runs as root via initial SSH key)
+#   2. jumpbox.yml — KtHW tooling and keypair placement on the jumpbox
+#   3. network.yml — hostnames, /etc/hosts, machines.txt, SSH config, connectivity check
+#
+# After this runs, the jumpbox is fully configured to begin the KtHW tutorial
+# at doc 04 (certificate authority). All subsequent ansible-playbook calls
+# connect as deploy@<host> using the jumpbox's id_ed25519 key.
+#
+# Variables required at runtime (passed by the CI pipeline):
+#   extra_authorized_keys  — list containing the jumpbox ed25519 public key
+#   jumpbox_private_key    — the jumpbox ed25519 private key (no_log: true in tasks)
+#
+# Example local run (after setting env vars):
+#   ansible-playbook -i inventory/hosts site.yml \
+#     -e "jumpbox_private_key=$(cat ~/.ssh/jumpbox_id_ed25519)" \
+#     -e '{"extra_authorized_keys": ["'"$(cat ~/.ssh/jumpbox_id_ed25519.pub)"'"]}'
+
+- name: Production server baseline
+  import_playbook: setup.yml
+
+- name: Jumpbox KtHW setup
+  import_playbook: jumpbox.yml
+
+- name: Cluster networking and SSH
+  import_playbook: network.yml
