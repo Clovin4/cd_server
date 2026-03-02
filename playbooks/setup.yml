@@ -1,13 +1,26 @@
 - name: Production Server Baseline
   hosts: all
-  # Always connect as root — this is the bootstrap play that runs before deploy
-  # exists. On re-runs against already-hardened nodes root will be locked out;
-  # ignore_unreachable lets the play skip those hosts cleanly rather than
-  # failing the whole pipeline. jumpbox.yml and network.yml connect as deploy.
+  # Always connect as root — this is the bootstrap play that runs before the
+  # deploy user exists. On re-runs against already-hardened nodes, root SSH is
+  # denied; the pre-task detects this and calls meta: end_host to skip cleanly.
   remote_user: root
-  ignore_unreachable: true
   become: true
-  gather_facts: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Check root SSH connectivity
+      wait_for_connection:
+        timeout: 10
+      register: root_check
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: Skip already-hardened hosts
+      meta: end_host
+      when: root_check is failed or root_check is not succeeded
+
+    - name: Gather facts
+      setup:
 
   vars:
     # ── User ──────────────────────────────────────────────────────────────────
@@ -253,7 +266,6 @@
     - name: Print UFW status
       debug:
         msg: "{{ ufw_status.stdout_lines }}"
-      when: ufw_status.stdout_lines is defined
 
     - name: Verify fail2ban is running
       command: fail2ban-client status sshd
@@ -264,7 +276,6 @@
     - name: Print fail2ban status
       debug:
         msg: "{{ f2b_status.stdout_lines }}"
-      when: f2b_status.stdout_lines is defined
 
   handlers:
     - name: Restart sshd
