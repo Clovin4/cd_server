@@ -253,6 +253,7 @@
     - name: Print UFW status
       debug:
         msg: "{{ ufw_status.stdout_lines }}"
+      when: ufw_status.stdout_lines is defined
 
     - name: Verify fail2ban is running
       command: fail2ban-client status sshd
@@ -263,6 +264,7 @@
     - name: Print fail2ban status
       debug:
         msg: "{{ f2b_status.stdout_lines }}"
+      when: f2b_status.stdout_lines is defined
 
   handlers:
     - name: Restart sshd
